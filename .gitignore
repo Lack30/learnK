@@ -1,0 +1,10 @@
+build
+dist
+
+*.ko
+*.o
+*.mod
+*.mod.*
+*.order
+*.symvers
+*.cmd
