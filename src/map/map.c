@@ -46,6 +46,7 @@ static void clear(void)
 	int btk = 0;
 	hash_for_each_safe (ht, btk, tmp, ptr, node) {
 		hash_del(&ptr->node);
+		kfree(ptr);
 	}
 }
 
