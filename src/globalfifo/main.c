@@ -1,10 +1,13 @@
+#include <linux/cdev.h>
+#include <linux/errno.h>
+#include <linux/sched.h>
+#include <linux/wait.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/init.h>
-#include <linux/cdev.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <linux/poll.h>
 
 MODULE_AUTHOR("Lack30");
 MODULE_LICENSE("GPL");
@@ -18,8 +21,11 @@ module_param(hello_major, int, S_IRUGO);
 
 struct hello_dev {
 	struct cdev cdev;
+	unsigned int current_len;
 	unsigned char mem[HELLODEV_SIZE];
 	struct mutex mutex;
+	wait_queue_head_t r_wait;
+	wait_queue_head_t w_wait;
 };
 
 struct hello_dev *hello_devp;
@@ -54,62 +60,130 @@ static long hello_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static ssize_t hello_read(struct file *filp, char __user *buf, size_t size,
+static ssize_t hello_read(struct file *filp, char __user *buf, size_t count,
 						  loff_t *ppos)
 {
-	unsigned long p = *ppos;
-	unsigned int count = size;
-	int ret = 0;
+	int ret;
 	struct hello_dev *dev = filp->private_data;
-
-	if (p >= HELLODEV_SIZE)
-		return 0;
-	if (count > HELLODEV_SIZE - p)
-		count = HELLODEV_SIZE - p;
+	DECLARE_WAITQUEUE(wait, current);
 
 	mutex_lock(&dev->mutex);
+	add_wait_queue(&dev->r_wait, &wait);
 
-	if (copy_to_user(buf, dev->mem + p, count)) {
-		ret = -EFAULT;
-	} else {
-		*ppos += count;
-		ret = count;
+	while (dev->current_len == 0) {
+		if (filp->f_flags & O_NONBLOCK) {
+			ret = -EAGAIN;
+			goto out;
+		}
+		__set_current_state(TASK_INTERRUPTIBLE);
+		mutex_unlock(&dev->mutex);
 
-		printk(KERN_INFO "read %u bytes(s) from %lu\n", count, p);
+		schedule();
+		if (signal_pending(current)) {
+			ret = -ERESTARTSYS;
+			goto out2;
+		}
+
+		mutex_lock(&dev->mutex);
 	}
 
-	mutex_unlock(&dev->mutex);
+	if (count > dev->current_len)
+		count = dev->current_len;
 
+	if (copy_to_user(buf, dev->mem, count)) {
+		ret = -EFAULT;
+		goto out;
+	} else {
+		memcpy(dev->mem, dev->mem + count, dev->current_len - count);
+		dev->current_len -= count;
+		pr_info("read %ld byte(s) current_len: %d\n", count, dev->current_len);
+
+		wake_up_interruptible(&dev->w_wait);
+
+		ret = count;
+	}
+
+out:
+	mutex_unlock(&dev->mutex);
+out2:
+	remove_wait_queue(&dev->w_wait, &wait);
+	set_current_state(TASK_RUNNING);
 	return ret;
 }
 
 static ssize_t hello_write(struct file *filp, const char __user *buf,
-						   size_t size, loff_t *ppos)
+						   size_t count, loff_t *ppos)
 {
-	unsigned long p = *ppos;
-	unsigned int count = size;
-	int ret = 0;
 	struct hello_dev *dev = filp->private_data;
+	int ret;
+	DECLARE_WAITQUEUE(wait, current);
 
-	if (p >= HELLODEV_SIZE)
-		return 0;
-	if (count > HELLODEV_SIZE - p)
-		count = HELLODEV_SIZE - p;
+	mutex_lock(&dev->mutex);
+	add_wait_queue(&dev->w_wait, &wait);
+
+	while (dev->current_len == HELLODEV_SIZE) {
+		if (filp->f_flags & O_NONBLOCK) {
+			ret = -EAGAIN;
+			goto out;
+		}
+		__set_current_state(TASK_INTERRUPTIBLE);
+
+		mutex_unlock(&dev->mutex);
+
+		schedule();
+		if (signal_pending(current)) {
+			ret = -ERESTARTSYS;
+			goto out2;
+		}
+
+		mutex_lock(&dev->mutex);
+	}
+
+	if (count > HELLODEV_SIZE - dev->current_len)
+		count = HELLODEV_SIZE - dev->current_len;
+
+	if (copy_from_user(dev->mem + dev->current_len, buf, count)) {
+		ret = -EFAULT;
+		goto out;
+	} else {
+		dev->current_len += count;
+		pr_info("written %ld byte(s), current_len: %d\n", count,
+				dev->current_len);
+
+		wake_up_interruptible(&dev->r_wait);
+
+		ret = count;
+	}
+
+out:
+	mutex_unlock(&dev->mutex);
+out2:
+	remove_wait_queue(&dev->w_wait, &wait);
+	set_current_state(TASK_RUNNING);
+
+	return ret;
+}
+
+static unsigned int hello_poll(struct file *filp, poll_table *wait)
+{
+	unsigned int mask = 0;
+	struct hello_dev *dev = filp->private_data;
 
 	mutex_lock(&dev->mutex);
 
-	if (copy_from_user(dev->mem + p, buf, count))
-		ret = -EFAULT;
-	else {
-		*ppos += count;
-		ret = count;
+	poll_wait(filp, &dev->r_wait, wait);
+	poll_wait(filp, &dev->w_wait, wait);
 
-		printk(KERN_INFO "written %u bytes(s) from %lu\n", count, p);
+	if (dev->current_len != 0) {
+		mask |= POLLIN | POLLRDNORM;
 	}
 
-	mutex_unlock(&dev->mutex);
+	if (dev->current_len != HELLODEV_SIZE) {
+		mask |= POLLOUT | POLLWRNORM;
+	}
 
-	return ret;
+	mutex_lock(&dev->mutex);
+	return mask;
 }
 
 static loff_t hello_llseek(struct file *filp, loff_t offset, int orig)
@@ -152,6 +226,7 @@ static const struct file_operations hello_fops = {
 	.llseek = hello_llseek,
 	.read = hello_read,
 	.write = hello_write,
+	.poll = hello_poll,
 	.unlocked_ioctl = hello_ioctl,
 	.open = hello_open,
 	.release = hello_release,
@@ -188,8 +263,12 @@ static int __init hello_init(void)
 		goto fail_malloc;
 	}
 
-	mutex_init(&hello_devp->mutex);
 	hello_setup_cdev(hello_devp, 0);
+
+	mutex_init(&hello_devp->mutex);
+	init_waitqueue_head(&hello_devp->r_wait);
+	init_waitqueue_head(&hello_devp->w_wait);
+
 	return 0;
 
 fail_malloc:
