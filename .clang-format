@@ -509,10 +509,19 @@ ForEachMacros:
 
 #IncludeBlocks: Preserve # Unknown to clang-format-5.0
 IncludeCategories:
-  - Regex: '.*'
-    Priority: 1
+  - Regex:           '^(<.*>)'  # 匹配系统头文件（如 <vector>）
+    Priority:        1          # 优先级最高，强制使用 <>
+    SortPriority:    1
+    CaseSensitive:   false
+
+  - Regex:           '.*'       # 其他所有头文件默认使用 ""
+    Priority:        2
+    SortPriority:    2
+    CaseSensitive:   false
+    
 IncludeIsMainRegex: '(Test)?$'
 IndentCaseLabels: false
+IncludeStyle: AngleBrackets
 #IndentPPDirectives: None # Unknown to clang-format-5.0
 IndentWidth: 4
 IndentWrappedFunctionNames: false
@@ -539,7 +548,7 @@ PenaltyReturnTypeOnItsOwnLine: 60
 
 PointerAlignment: Right
 ReflowComments: false
-SortIncludes: false
+SortIncludes: CaseSensitive
 #SortUsingDeclarations: false # Unknown to clang-format-4.0
 SpaceAfterCStyleCast: false
 SpaceAfterTemplateKeyword: true

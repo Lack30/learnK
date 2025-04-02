@@ -8,3 +8,6 @@ dist
 *.order
 *.symvers
 *.cmd
+
+*.tar
+*.gz

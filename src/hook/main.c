@@ -1,108 +1,180 @@
-
-#include "linux/cred.h"
-#include <linux/binfmts.h>
-#include <linux/cdev.h>
-#include <linux/delay.h>
-#include <linux/device.h>
-#include <linux/file.h>
+#include <linux/dcache.h>
 #include <linux/fs.h>
-#include <linux/fs_struct.h>
-#include <linux/init.h>
-#include <linux/kernel.h>
 #include <linux/kprobes.h>
-#include <linux/kthread.h>
-#include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mount.h>
+#include <linux/path.h>
 #include <linux/slab.h>
-#include <linux/types.h>
 #include <linux/uaccess.h>
 
-MODULE_LICENSE("Dual BSD/GPL");
-MODULE_AUTHOR("CyberSecurity");
+#define KPS_SIZE 10
 
-#ifdef DEBUG
-#define DBGINFO(m, ...) pr_debug(KBUILD_MODNAME "-dbg: " m "\n", ##__VA_ARGS__)
-#else
-#define DBGINFO(m, ...) 
-#endif
+static struct kprobe kps[KPS_SIZE];
 
-static struct kretprobe kp = {
-	.kp.symbol_name = "do_sys_openat2",
-	.data_size = PATH_MAX //kretprobe私有数据,方便在不同函数间传递数据
-};
+static void build_path(struct dentry *dentry, char *buffer, int *offset) {
+  if (!dentry || dentry == dentry->d_parent) // 根目录终止条件
+    return;
 
-static int handler_pre(struct kretprobe_instance *p,
-					   struct pt_regs *regs) //注意,结构和kprobe稍微有点不一样
-{
-	int slen = 0;
-	char *filename = NULL;
-	const unsigned char *ps_cwd = NULL;
-	const char *__user us_filename =
-			(const void *)regs->si; // gcc x64 约定 rsi 为第二个参数
-	if (IS_ERR_OR_NULL(us_filename))
-		return -EFAULT;
+  build_path(dentry->d_parent, buffer, offset); // 递归父目录
 
-	slen = strnlen_user(
-			us_filename,
-			PATH_MAX); // strlen 内核版 , 用户空间的东西都需要单独操作,内核不可直接访问用户空间
-	if (!slen || slen > PATH_MAX)
-		return -EFAULT;
+  // 拼接当前目录名
+  int len = snprintf(buffer + *offset, PATH_MAX - *offset, "/%s",
+                     dentry->d_name.name);
 
-	filename = kzalloc(slen + 1, GFP_ATOMIC);
-	if (PTR_ERR_OR_ZERO(filename))
-		return -EFAULT;
-
-	if (copy_from_user(filename, us_filename, slen)) {
-		return -EFAULT;
-	}
-
-	if (strstr(filename, "/run") != NULL ||
-		strstr(filename, "/proc") != NULL) //过滤非必要文件
-		return 0;
-
-	memcpy(p->data, filename, slen);
-	ps_cwd =
-			current->mm->owner->fs->pwd.dentry->d_name
-					.name; //获取程序执行目录,注意,openat参数为相对目录时需要自己拼接程序执行目录才能得到绝对路径
-			
-	DBGINFO("OPEN AT %s By PID:%d,CWD:%s", filename, current->mm->owner->pid,
-			ps_cwd);
-	kfree(filename);
-	return 0;
-}
-extern int close_fd(unsigned fd);
-static int handler_post(struct kretprobe_instance *ri, struct pt_regs *regs)
-{
-	char *filename = ri->data;
-	if (IS_ERR_OR_NULL(filename))
-		return -EFAULT;
-
-	if (strcmp(filename, "test.txt") == 0) //修改openat返回值 达到保护目的
-	{
-		unsigned int fd = regs_return_value(regs);
-		close_fd(fd);
-		regs_set_return_value(regs, -EBADF);
-	}
-	return 0;
+  *offset += len;
 }
 
-static __init int kprobe_init(void)
-{
-	int ret;
-	kp.handler = handler_post;
-	kp.entry_handler = handler_pre;
-	ret = register_kretprobe(&kp);
-	if (ret < 0) {
-		printk(KERN_INFO "register_kprobe failed, returned %d\n", ret);
-		return ret;
-	}
-	printk("Planted return probe at %s: %p\n", kp.kp.symbol_name, kp.kp.addr);
-	return 0;
-}
-static __exit void kprobe_exit(void)
-{
-	unregister_kretprobe(&kp);
+char *get_absolute_path(struct dentry *d) {
+  int offset = 0;
+  char *buffer = kmalloc(PATH_MAX, GFP_KERNEL);
+  if (!buffer)
+    return NULL;
+
+  build_path(d, buffer, &offset);
+  return buffer;
 }
 
-module_init(kprobe_init);
-module_exit(kprobe_exit);
+static int vfs_write_pre(struct kprobe *p, struct pt_regs *regs) {
+  int slen = 0;
+  char *fname = NULL;
+  char *data = NULL;
+  char *fpath = NULL;
+
+  // x86_64 参数顺序依次为 rdi, rsi, rdx, rcx
+  struct file *file = (struct file *)regs->di;
+  const char __user *buf = (const char __user *)regs->si;
+  size_t count = regs->dx;
+  loff_t *pos = (loff_t *)regs->cx;
+
+  // 检查用户空间指针合法性（适配 5.19 set_fs 移除）
+  // if (!__kernel_ok(buf, count)) {
+  // 	pr_info("Illegal user buffer: %p\n", buf);
+  // 	return -EFAULT;
+  // }
+
+  fname = (char *)file->f_path.dentry->d_name.name;
+  if (strcmp(fname, "test.txt") != 0) {
+    return 0;
+  }
+
+  if (IS_ERR_OR_NULL(buf))
+    return -EFAULT;
+
+  slen = strnlen_user(buf, PATH_MAX);
+  if (!slen || slen > PATH_MAX)
+    return -EFAULT;
+
+  data = kzalloc(slen + 1, GFP_ATOMIC);
+  if (PTR_ERR_OR_ZERO(data))
+    return -EFAULT;
+
+  if (copy_from_user(data, buf, count)) {
+    kfree(data);
+    return -EFAULT;
+  }
+
+  fpath = get_absolute_path(file->f_path.dentry);
+
+  // 拦截逻辑：记录写入操作（示例）
+  pr_info("Process %s writes %zu bytes (pos:%lld) to %s: %s\n", current->comm,
+          count, *pos, fpath, data);
+
+  kfree(data);
+  kfree(fpath);
+
+  return 0;
+}
+
+static void vfs_write_post(struct kprobe *p, struct pt_regs *regs,
+                           unsigned long flags) {
+  char *fpath = NULL;
+  char *fname = NULL;
+  struct file *file = (struct file *)regs->di; // x86_64 参数顺序
+
+  fpath = get_absolute_path(file->f_path.dentry);
+
+  fname = (char *)file->f_path.dentry->d_name.name;
+  if (strcmp(fname, "test.txt") != 0) {
+    return;
+  }
+
+  pr_info("write %s post!!\n", fpath);
+  kfree(fpath);
+}
+
+static int vfs_rename_pre(struct kprobe *p, struct pt_regs *regs) {
+  char *fname = NULL;
+  char *newname = NULL;
+  struct renamedata *rd = (struct renamedata *)regs->di;
+
+  fname = (char *)rd->old_dentry->d_name.name;
+  if (strcmp(fname, "test.txt") != 0) {
+    return 0;
+  }
+
+  newname = (char *)rd->new_dentry->d_name.name;
+  pr_info("rename %s -> %s\n", fname, newname);
+
+  return 0;
+}
+
+static int vfs_unlink_pre(struct kprobe *p, struct pt_regs *regs) {
+  char *fpath = NULL;
+  char *fname = NULL;
+  struct dentry *d = (struct dentry *)regs->dx;
+
+  fname = (char *)d->d_name.name;
+  if (strcmp(fname, "test.txt") != 0) {
+    return 0;
+  }
+
+  fpath = get_absolute_path(d);
+  pr_info("remove %s\n", fpath);
+
+  return 0;
+}
+
+static int __init hook_init(void) {
+  int i;
+  int kps_count;
+  struct kprobe vfs_write_sp = {
+      .symbol_name = "vfs_write",
+      .pre_handler = vfs_write_pre,
+      .post_handler = vfs_write_post,
+  };
+
+  struct kprobe vfs_rename_sp = {
+      .symbol_name = "vfs_rename",
+      .pre_handler = vfs_rename_pre,
+      .post_handler = NULL,
+  };
+
+  struct kprobe vfs_unlink_sp = {
+      .symbol_name = "vfs_unlink",
+      .pre_handler = vfs_unlink_pre,
+  };
+
+  kps[0] = vfs_write_sp;
+  kps[1] = vfs_rename_sp;
+  kps[2] = vfs_unlink_sp;
+
+  kps_count = 3;
+  for (i = 0; i < kps_count; i++) {
+    register_kprobe(&kps[i]);
+  }
+
+  return 0;
+}
+
+static void __exit hook_exit(void) {
+  int i;
+  int kps_count = 3;
+  for (i = 0; i < kps_count; i++) {
+    unregister_kprobe(&kps[i]);
+  }
+}
+
+module_init(hook_init);
+module_exit(hook_exit);
+
+MODULE_LICENSE("GPL");
