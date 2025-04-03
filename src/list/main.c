@@ -1,7 +1,9 @@
 #include <linux/init.h>
-#include <linux/types.h>
 #include <linux/list.h>
 #include <linux/module.h>
+#include <linux/types.h>
+
+#include "node_list.h"
 
 MODULE_LICENSE("GPL"); // 模块采用的协议
 MODULE_AUTHOR("Lack"); // 模块作者
@@ -81,6 +83,39 @@ static int __init list_init(void)
 	if (list_empty(&head)) {
 		pr_info("list empty");
 	}
+
+	pr_info("======== Queue ========");
+	struct Queue *q = add_queue();
+	enqueue(q, 1);
+	enqueue(q, 2);
+	enqueue(q, 3);
+
+	int i = 0;
+	dequeue(q, &i);
+	pr_info("print node=%d, length=%d\n", i, queue_len(q));
+	dequeue(q, &i);
+	pr_info("print node=%d, length=%d\n", i, queue_len(q));
+	dequeue(q, &i);
+	pr_info("print node=%d, length=%d\n", i, queue_len(q));
+
+	del_queue(q);
+
+	pr_info("======== Stack ========");
+
+	struct Stack *s = add_stack();
+	stack_push(s, 1);
+	stack_push(s, 2);
+	stack_push(s, 3);
+
+	int a = 0;
+	stack_pop(s, &a);
+	pr_info("print node=%d, length=%d\n", a, stack_len(s));
+	stack_pop(s, &a);
+	pr_info("print node=%d, length=%d\n", a, stack_len(s));
+	stack_pop(s, &a);
+	pr_info("print node=%d, length=%d\n", a, stack_len(s));
+
+	del_stack(s);
 
 	return 0;
 }

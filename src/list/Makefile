@@ -2,7 +2,7 @@
 # 源代码文件
 obj-m += list.o
 
-# list-objs := list.o
+list-objs := main.o node_list.o
 
 # 添加全局编译选项
 EXTRA_CFLAGS += -g -O0
