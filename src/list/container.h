@@ -9,6 +9,11 @@ struct listNode {
 	int value;
 };
 
+struct LinkList {
+	struct list_head head;
+	int count;
+};
+
 struct Queue {
 	struct list_head head;
 	int count;
@@ -20,6 +25,24 @@ struct Stack {
 };
 
 struct listNode *add_node(int value);
+
+char *to_string(struct list_head *head);
+
+struct LinkList *add_link_list(void);
+
+void link_list_get(struct LinkList *l, int index, int *ret);
+
+void link_list_push(struct LinkList *l, int value);
+
+void link_list_insert(struct LinkList *i, int index, int value);
+
+void link_list_remove(struct LinkList *l, int index);
+
+void link_list_pop(struct LinkList *l, int *ret);
+
+int link_list_len(struct LinkList *l);
+
+void del_link_list(struct LinkList *l);
 
 struct Queue *add_queue(void);
 
