@@ -2,6 +2,8 @@
 # 源代码文件
 obj-m += rbtree.o
 
+obj-m += interval_tree.o
+
 rbtree-objs := main.o
 
 # 添加全局编译选项
