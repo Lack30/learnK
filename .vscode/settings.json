@@ -28,17 +28,7 @@
         "module.h": "c",
         "fs.h": "c",
         "init.h": "c",
-        "kernel.h": "c",
-        "radix-tree.h": "c",
-        "slab.h": "c",
-        "xarray.h": "c",
-        "hash.h": "c",
-        "jiffies.h": "c",
-        "cache.h": "c",
-        "interval_tree.h": "c",
-        "string.h": "c",
-        "stddef.h": "c",
-        "interval_tree_generic.h": "c"
+        "kernel.h": "c"
     },
     // 开启粘贴保存自动格式化
     "editor.formatOnPaste": true,

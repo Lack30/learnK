@@ -20,7 +20,7 @@ AlignTrailingComments: false
 AllowAllParametersOfDeclarationOnNextLine: false
 AllowShortBlocksOnASingleLine: false
 AllowShortCaseLabelsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: None
+AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakAfterDefinitionReturnType: None
@@ -46,7 +46,7 @@ BraceWrapping:
   #SplitEmptyRecord: true # Unknown to clang-format-4.0
   #SplitEmptyNamespace: true # Unknown to clang-format-4.0
 BreakBeforeBinaryOperators: None
-BreakBeforeBraces: Custom
+BreakBeforeBraces: Allman
 #BreakBeforeInheritanceComma: false # Unknown to clang-format-4.0
 BreakBeforeTernaryOperators: false
 BreakConstructorInitializersBeforeComma: false
@@ -567,5 +567,5 @@ SpacesInParentheses: false
 SpacesInSquareBrackets: false
 Standard: Cpp03
 TabWidth: 4
-UseTab: Always
+UseTab: Never
 
