@@ -17,7 +17,7 @@ static int __init hello_init(void)
 {
 	printk(KERN_INFO "Hello, %s!\n", name);
 	printk(KERN_INFO "number is %d\n", number);
-	printk(KERN_INFO "a + b = %d\n", add_integer(1,2));
+    printk(KERN_INFO "a + b = %d\n", add_integer(1, 2));
 	return 0;
 }
 
