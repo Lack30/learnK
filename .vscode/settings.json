@@ -28,7 +28,8 @@
         "module.h": "c",
         "fs.h": "c",
         "init.h": "c",
-        "kernel.h": "c"
+        "kernel.h": "c",
+        "netfwd": "c"
     },
     // 开启粘贴保存自动格式化
     "editor.formatOnPaste": true,

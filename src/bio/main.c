@@ -3,56 +3,38 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include "asm/string_64.h"
-#include "linux/mm_types.h"
 
 #define SECTOR_SIZE 512 // 默认扇区大小（需根据实际设备确认）
 
 static struct block_device *target_bdev = NULL;
-static struct bio *custom_bio = NULL;
 static char *read_buffer = NULL;
 static char *write_buffer = NULL;
-
-static void custom_bio_end_io(struct bio *bio)
-{
-	// 释放bio结构体
-	bio_put(bio);
-}
 
 // 自定义Bio提交函数
 static int submit_custom_bio(sector_t sector, int op)
 {
     struct bio *bio = bio_alloc(GFP_KERNEL, 1);
     if (!bio)
+    {
         return -ENOMEM;
+    }
 
-	bio->bi_iter.bi_sector = sector;
-	bio->bi_bdev = target_bdev;
-	bio->bi_opf = op;
-	bio_set_dev(bio, target_bdev);
-	bio->bi_end_io = custom_bio_end_io; // 设置自定义完成回调函数
+    bio->bi_iter.bi_sector = sector;
+    bio->bi_bdev = target_bdev;
+    bio->bi_opf = op;
+    bio_set_dev(bio, target_bdev);
+    // bio->bi_end_io = custom_bio_end_io; // 设置自定义完成回调函数
 
     if (op == REQ_OP_READ)
     {
-        struct page *vp = virt_to_page(read_buffer);
-        if (!vp)
-        {
-            bio_put(bio);
-            return -ENOMEM;
-        }
-
-        bio_add_page(bio, vp, SECTOR_SIZE, offset_in_page(read_buffer));
+        bio_add_page(bio, virt_to_page(read_buffer), SECTOR_SIZE,
+                     offset_in_page(read_buffer));
     }
     else
     {
         strcpy(write_buffer, "Hello, World!"); // 写入数据
-        struct page *vp = virt_to_page(write_buffer);
-        if (!vp)
-        {
-            bio_put(bio);
-            return -ENOMEM;
-        }
-        bio_add_page(bio, vp, SECTOR_SIZE, offset_in_page(write_buffer));
+        bio_add_page(bio, virt_to_page(write_buffer), SECTOR_SIZE,
+                     offset_in_page(write_buffer));
     }
 
     pr_info("submit io: %lld\n", sector);
