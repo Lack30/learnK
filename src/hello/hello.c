@@ -1,6 +1,6 @@
+#include "calc.h"
 #include <linux/init.h>
 #include <linux/module.h>
-#include "calc.h"
 
 MODULE_LICENSE("GPL"); // 模块采用的协议
 MODULE_AUTHOR("Lack"); // 模块作者
@@ -17,7 +17,7 @@ static int __init hello_init(void)
 {
 	printk(KERN_INFO "Hello, %s!\n", name);
 	printk(KERN_INFO "number is %d\n", number);
-    printk(KERN_INFO "a + b = %d\n", add_integer(1, 2));
+	printk(KERN_INFO "a + b = %d\n", add_integer(1, 2));
 	return 0;
 }
 

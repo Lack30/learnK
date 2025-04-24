@@ -1,11 +1,11 @@
 
 # 源代码文件
-obj-m += bio.o hello.o
+obj-m += vfs.o
 
-bio-objs := main.o
+vfs-objs := main.o
 
 # 添加全局编译选项
-EXTRA_CFLAGS += -g -O1
+EXTRA_CFLAGS += -g -O0
 
 # 编译模块
 .PNONY: all 

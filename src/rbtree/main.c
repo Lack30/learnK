@@ -1,7 +1,8 @@
-#include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/rbtree.h>
 #include <linux/slab.h>
+#include <linux/xxhash.h>
 
 MODULE_LICENSE("GPL");
 
@@ -72,7 +73,8 @@ void print_all_entries(void)
 	struct rb_node *n;
 	for (n = rb_first(&my_tree); n; n = rb_next(n)) {
 		struct my_entry *entry = rb_entry(n, struct my_entry, node);
-		printk(KERN_INFO "Key: %d, Data: %s\n", entry->key, entry->data);
+		printk(KERN_INFO "Key: %d, Data: %s\n", entry->key,
+		       entry->data);
 	}
 }
 

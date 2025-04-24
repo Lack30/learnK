@@ -1,5 +1,5 @@
 
-obj-m += hook.o
+obj-m += hook.o khook.o
 
 hook-objs := main.o
 

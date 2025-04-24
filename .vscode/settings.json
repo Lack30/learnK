@@ -29,7 +29,13 @@
         "fs.h": "c",
         "init.h": "c",
         "kernel.h": "c",
-        "netfwd": "c"
+        "netfwd": "c",
+        "typeinfo": "c",
+        "kprobes.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "version.h": "c"
     },
     // 开启粘贴保存自动格式化
     "editor.formatOnPaste": true,
@@ -39,6 +45,7 @@
     "C_Cpp.intelliSenseEngineFallback": "Disabled",
     "C_Cpp.intelliSenseEngine": "Disabled",
     "C_Cpp.autocomplete": "Disabled", // So you don't get autocomplete from both extensions.
+    "C_Cpp.clang_format_path": "${workspaceFolder}/.clang-format",
     "clangd.path": "/usr/bin/clangd",
     // Clangd 运行参数(在终端/命令行输入 clangd --help-list-hidden 可查看更多)
     "clangd.arguments": [

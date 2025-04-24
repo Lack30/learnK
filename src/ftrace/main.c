@@ -1,91 +1,177 @@
+#include <linux/fs.h>
 #include <linux/ftrace.h>
 #include <linux/kallsyms.h>
 #include <linux/kprobes.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 
-static struct ftrace_ops ops;
-unsigned long target_ip = 0;
+struct ftrace_hook {
+	const char *name;
+	void *function;
+	void *original;
+
+	unsigned long address;
+	struct ftrace_ops ops;
+};
+
+#define HOOK(_name, _function, _original)                                                          \
+	{                                                                                          \
+		.name = (_name), .function = (_function), .original = (_original),                 \
+	}
+
+static inline bool dattobd_within_module(unsigned long addr, const struct module *mod)
+{
+	return within_module(addr, mod);
+}
 
 static unsigned long lookup_name(const char *name)
 {
-    struct kprobe kp = { .symbol_name = name };
-    unsigned long address = 0;
-    int ret = 0;
+	struct kprobe kp = { .symbol_name = name };
+	unsigned long address = 0;
+	int ret = 0;
 
-    ret = register_kprobe(&kp);
+	ret = register_kprobe(&kp);
 
-    if (ret < 0)
-    {
-        pr_err("failed registering kprobe for %s", name);
-        return 0;
-    }
-    address = (unsigned long)kp.addr;
-    unregister_kprobe(&kp);
+	if (ret < 0) {
+		pr_err("failed registering kprobe for %s", name);
+		return 0;
+	}
+	address = (unsigned long)kp.addr;
+	unregister_kprobe(&kp);
 
-    return address;
+	return address;
 }
 
-static int (*orig_path_mount)(const char *dev_name, struct path *path,
-                              const char *type_page, unsigned long flags,
-                              void *data_page);
-
-static int ftrace_path_mount(const char *dev_name, struct path *path,
-                             const char *type_page, unsigned long flags,
-                             void *data_page)
-
+static int resolve_hook_address(struct ftrace_hook *hook)
 {
-    return orig_path_mount(dev_name, path, type_page, flags, data_page);
+	hook->address = lookup_name(hook->name);
+
+	if (!hook->address) {
+		pr_err("unresolved symbol: %s", hook->name);
+		return -ENOENT;
+	}
+
+	pr_info("resolved %s to %lx\n", hook->name, hook->address);
+	*((unsigned long *)hook->original) = hook->address;
+
+	return 0;
 }
-// 回调函数，在 sys_mount 执行时触发
-static void trace_callback(unsigned long ip, unsigned long parent_ip,
-                           struct ftrace_ops *ops, struct ftrace_regs *fregs)
+
+/* asmlinkage long sys_mount(char __user *dev_name, char __user *dir_name,
+                char __user *type, unsigned long flags,
+				void __user *data);
+ */
+static int (*orig_path_mount)(const char *dev_name, struct path *path, const char *type_page,
+			      unsigned long flags, void *data_page);
+
+static int ftrace_path_mount(const char *dev_name, struct path *path, const char *type_page,
+			     unsigned long flags, void *data_page)
+
 {
-    struct pt_regs *regs = ftrace_get_regs(fregs);
-    regs->ip = parent_ip;
-    pr_info("sys_mount called: %lx\n", ip);
+	int sys_ret = 0;
+	char *dir_name = NULL;
+	char *buf = NULL;
+
+	buf = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!buf) {
+		return -ENOMEM;
+	}
+
+	dir_name = d_path(path, buf, PATH_MAX);
+	pr_info("mount %s to %s\n", dev_name, dir_name);
+	sys_ret = orig_path_mount(dev_name, path, type_page, flags, data_page);
+	if (sys_ret)
+		pr_err("mount %s to %s failed: %d\n", dev_name, dir_name, sys_ret);
+
+	if (buf)
+		kfree(buf);
+	return sys_ret;
+}
+
+// 回调函数，在 hook 执行时触发
+static void notrace ftrace_callback_handler(unsigned long ip, unsigned long parent_ip,
+					    struct ftrace_ops *ops, struct ftrace_regs *fregs)
+{
+	struct pt_regs *regs = ftrace_get_regs(fregs);
+	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+	pr_info("ftrace callback: %lx\n", ip);
+	if (!dattobd_within_module(parent_ip, THIS_MODULE)) {
+		pr_info("set ftrace address %lx\n", (unsigned long)hook->function);
+		regs->ip = (unsigned long)hook->function;
+	}
+}
+
+static struct ftrace_hook path_mount_hook = HOOK("path_mount", ftrace_path_mount, &orig_path_mount);
+
+static int register_hook(struct ftrace_hook *hook)
+{
+	int ret = 0;
+
+	ret = resolve_hook_address(hook);
+	if (ret) {
+		pr_err("failed resolving hook address for %s", hook->name);
+		return ret;
+	}
+
+	hook->ops.func = ftrace_callback_handler;
+	// cat /boot/config-$(uname -r) | grep "FTRACE" 查看内核中关于 ftrace 的参数
+	//  FTRACE_OPS_FL_SAVE_REGS: 保存寄存器，
+	//   需要内核中 CONFIG_DYNAMIC_FTRACE_WITH_REGS=y 或 CONFIG_HAVE_DYNAMIC_FTRACE_WITH_REGS=y
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_RECURSION |
+		FTRACE_OPS_FL_IPMODIFY;
+
+	ret = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+	if (ret) {
+		pr_err("failed setting ftrace filter ip: %d for %s", ret, hook->name);
+		return ret;
+	}
+
+	ret = register_ftrace_function(&hook->ops);
+	if (ret) {
+		pr_err("failed registering ftrace function for %s: %d", hook->name, ret);
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+		return ret;
+	}
+
+	pr_info("registered ftrace hook for %s", hook->name);
+
+	return ret;
+}
+
+static int unregister_hook(struct ftrace_hook *hook)
+{
+	int ret = 0;
+
+	ret = unregister_ftrace_function(&hook->ops);
+	if (ret) {
+		pr_err("failed unregistering ftrace function for %s", hook->name);
+	}
+
+	ret = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+	if (ret) {
+		pr_err("failed setting ftrace filter ip for %s", hook->name);
+	}
+	return ret;
 }
 
 static int __init __ftrace_init(void)
 {
-    // 动态获取 sys_mount 的实际符号名（适配不同架构）
-    target_ip = lookup_name("path_mount"); // 通用名称（部分内核版本）
-    if (!target_ip)
-    {
-        printk(KERN_ERR "path_mount symbol not found\n");
-        return -ENOENT;
-    }
-    *((unsigned long *)orig_path_mount) = target_ip;
+	int ret;
+	ret = register_hook(&path_mount_hook); // 注册钩子函数
+	if (ret) {
+		pr_err("failed to register hook\n");
+		return -EINVAL;
+	}
 
-    // 配置 ftrace 操作
-    ops.func = trace_callback;
-    ops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_RECURSION |
-                FTRACE_OPS_FL_IPMODIFY;
+	pr_info("Module loaded\n");
 
-    int ret = ftrace_set_filter_ip(&ops, target_ip, 0, 0); // 按地址过滤
-    if (ret)
-    {
-        printk(KERN_ERR "filter setup failed: %d\n", ret);
-        unregister_ftrace_function(&ops);
-        return ret;
-    }
-
-    // 注册 ftrace 并设置过滤器
-    ret = register_ftrace_function(&ops);
-    if (ret)
-    {
-        printk(KERN_ERR "ftrace registration failed: %d\n", ret);
-        return ret;
-    }
-
-    printk(KERN_INFO "Monitoring path_mount (IP: 0x%lx)\n", target_ip);
-    return 0;
+	return 0;
 }
 
 static void __exit __ftrace_exit(void)
 {
-    ftrace_set_filter_ip(&ops, target_ip, 1, 0); // 移除过滤器
-    unregister_ftrace_function(&ops);
-    printk(KERN_INFO "Module unloaded\n");
+	unregister_hook(&path_mount_hook); // 注销钩子函数
+	printk(KERN_INFO "Module unloaded\n");
 }
 
 module_init(__ftrace_init);
