@@ -2,7 +2,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
-#define STRING_CAP 256
+#define STRING_CAP 64
 
 struct string_view {
 	char *str;
@@ -11,25 +11,6 @@ struct string_view {
 };
 
 typedef struct string_view *string_t;
-
-static string_t string_new(const char *str)
-{
-	string_t s = kmalloc(sizeof(string_t), GFP_KERNEL);
-	if (!s)
-		return NULL;
-
-	s->len = strlen(str);
-	s->cap = STRING_CAP;
-	s->str = kmalloc(s->cap, GFP_KERNEL);
-	if (!s->str) {
-		kfree(s);
-		return NULL;
-	}
-
-	strncpy(s->str, str, s->len);
-	s->str[s->len] = '\0';
-	return s;
-}
 
 static string_t string_new_cap(const char *str, unsigned long cap)
 {
@@ -55,6 +36,11 @@ static string_t string_new_cap(const char *str, unsigned long cap)
 	strncpy(s->str, str, s->len);
 	s->str[s->len] = '\0';
 	return s;
+}
+
+static string_t string_new(const char *str)
+{
+	return string_new_cap(str, STRING_CAP);
 }
 
 static void string_free(string_t s)
