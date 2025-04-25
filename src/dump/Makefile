@@ -1,8 +1,8 @@
 
 # 源代码文件
-obj-m += netlink_main1.o
+obj-m += dump.o 
 
-netlink_main1-objs := main.o
+dump-objs := main.o dumps.o
 
 # 添加全局编译选项
 EXTRA_CFLAGS += -g -O0
@@ -11,9 +11,10 @@ EXTRA_CFLAGS += -g -O0
 .PNONY: all 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
-	gcc netlink.c -o netlink
+	gcc dumps.c test.c -o test
 
 # 清除模块
 .PNONY: clean
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+	rm -fr test

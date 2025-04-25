@@ -16,10 +16,8 @@ static string_t string_new_cap(const char *str, unsigned long cap)
 {
 	string_t s;
 	int len = strlen(str);
-	if (len > cap) {
-		pr_err("string length exceeds capacity\n");
+	if (len > cap)
 		return NULL;
-	}
 
 	s = kmalloc(sizeof(string_t), GFP_KERNEL);
 	if (!s)

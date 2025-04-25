@@ -1,73 +1,101 @@
-//go:build linux
-
-// main.go
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"os"
 	"syscall"
-	"unsafe"
 )
 
 const (
-	NETLINK_USER = 30
-	MAX_PAYLOAD    = 1024
+	NETLINK_USER = 22
+	USER_MSG     = 29
+	MAX_PLOAD    = 1024
 )
 
-func main() {
-	// 创建Netlink socket
-	sock, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, NETLINK_USER)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("sock = %d\n", sock)
+type MyParam struct {
+	ID    int32
+	Name  [32]byte
+	Value int32
+}
 
-	// 绑定到自定义协议
+func main() {
+	// 创建 Netlink 套接字
+	sockfd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, USER_MSG)
+	if err != nil {
+		fmt.Printf("create socket failure! %v\n", err)
+		os.Exit(1)
+	}
+	defer syscall.Close(sockfd)
+
+	// 本地地址
 	local := &syscall.SockaddrNetlink{
 		Family: syscall.AF_NETLINK,
-		Pid:    uint32(52),
+		Pid:    uint32(os.Getpid()),
 		Groups: 0,
 	}
-	if err := syscall.Bind(sock, local); err != nil {
-		panic(err)
+
+	// 绑定本地地址
+	err = syscall.Bind(sockfd, local)
+	if err != nil {
+		fmt.Printf("bind() error! %v\n", err)
+		os.Exit(1)
 	}
 
-	// 构造发送消息
-	msg := []byte("Hello from 11userspace!")
-	nlh := syscall.NlMsghdr{
-		Len:   syscall.NLMSG_HDRLEN + uint32(len(msg)),
+	// 远程地址
+	remote := &syscall.SockaddrNetlink{
+		Family: syscall.AF_NETLINK,
+		Pid:    0,
+		Groups: 0,
+	}
+
+	// 构造消息
+	data := MyParam{
+		ID:    1,
+		Value: 10,
+	}
+	copy(data.Name[:], "test")
+
+	nlh := &syscall.NlMsghdr{
+		Len:   syscall.NLMSG_HDRLEN + uint32(binary.Size(data)),
 		Type:  0,
 		Flags: 0,
 		Seq:   0,
-		Pid:   uint32(52),
+		Pid:   local.Pid,
 	}
-	buf := make([]byte, nlh.Len)
 
-	*(*syscall.NlMsghdr)(unsafe.Pointer(&buf[0])) = nlh
-	copy(buf[syscall.NLMSG_HDRLEN:], msg)
-
-	remote := &syscall.SockaddrNetlink{
-		Family: syscall.AF_NETLINK,
-		Pid:    uint32(0),
-		Groups: 0,
+	// 将消息序列化
+	buf := new(bytes.Buffer)
+	err = binary.Write(buf, binary.LittleEndian, nlh)
+	if err != nil {
+		fmt.Printf("binary write error: %v\n", err)
+		os.Exit(1)
+	}
+	err = binary.Write(buf, binary.LittleEndian, data)
+	if err != nil {
+		fmt.Printf("binary write error: %v\n", err)
+		os.Exit(1)
 	}
 
 	// 发送消息
-	fmt.Printf("send data: [%s] to kernel\n", string(buf))
-	if err := syscall.Sendto(sock, buf, 0, remote); err != nil {
-		panic(err)
-	}
-
-	// 接收响应
-	resp := make([]byte, MAX_PAYLOAD)
-	n, _, err := syscall.Recvfrom(sock, resp, 0)
+	fmt.Println("sendmsg start....")
+	err = syscall.Sendto(sockfd, buf.Bytes(), 0, remote)
 	if err != nil {
-		panic(err)
+		fmt.Printf("send to kernel failure! %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Printf("n = %d\n", n)
 
-	// 解析响应
-	nlh = *(*syscall.NlMsghdr)(unsafe.Pointer(&resp[0]))
-	payload := string(resp[syscall.NLMSG_HDRLEN :])
-	fmt.Printf("Received from kernel: %s\n", payload)
+	// 接收消息
+	fmt.Println("recvmsg start....")
+	recvBuf := make([]byte, syscall.Getpagesize())
+	n, _, err := syscall.Recvfrom(sockfd, recvBuf, 0)
+	if err != nil {
+		fmt.Printf("recv from kernel failure! %v\n", err)
+		os.Exit(1)
+	}
+
+	// 解析接收到的消息
+	recvData := recvBuf[syscall.NLMSG_HDRLEN:n]
+	fmt.Printf("recv data: %s\n", string(recvData))
 }
